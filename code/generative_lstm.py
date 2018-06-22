@@ -5,9 +5,10 @@ import numpy as np
 import pandas as pd
 import collections
 import re
+import argparse
 
 from keras.preprocessing.text import Tokenizer
-from keras.models import Sequential
+from keras.models import Sequential, load_model
 from keras.layers import Dense, LSTM, Dropout, Activation, Embedding, Dropout, TimeDistributed
 from keras.callbacks import ModelCheckpoint
 from keras.utils import np_utils
@@ -78,7 +79,7 @@ class KerasBatchGenerator(object):
             yield x, y
 
 
-if __name__ == '__main__':
+def train_model():
 
     train = get_data_by_author('EAP')
 
@@ -88,30 +89,90 @@ if __name__ == '__main__':
 
     train_data = data_to_word_ids(train, word_to_id)
 
-
-num_steps = 30
-batch_size = 20
-train_data_generator = KerasBatchGenerator(train_data, num_steps, batch_size, vocabulary,
+    num_steps = 30
+    batch_size = 20
+    train_data_generator = KerasBatchGenerator(train_data, num_steps, batch_size, vocabulary,
                                            skip_step=num_steps)
 
-hidden_size = 500
+    hidden_size = 500
 
-model = Sequential()
-model.add(Embedding(vocabulary, hidden_size, input_length=num_steps))
-model.add(LSTM(hidden_size, return_sequences=True))
-model.add(LSTM(hidden_size, return_sequences=True))
-model.add(Dropout(0.5))
-model.add(TimeDistributed(Dense(vocabulary)))
-model.add(Activation('softmax'))
+    model = Sequential()
+    model.add(Embedding(vocabulary, hidden_size, input_length=num_steps))
+    model.add(LSTM(hidden_size, return_sequences=True))
+    model.add(LSTM(hidden_size, return_sequences=True))
+    model.add(Dropout(0.5))
+    model.add(TimeDistributed(Dense(vocabulary)))
+    model.add(Activation('softmax'))
 
-optimizer = Adam()
-model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['categorical_accuracy'])
+    optimizer = Adam()
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['categorical_accuracy'])
 
-print(model.summary())
+    print(model.summary())
+    checkpointer = ModelCheckpoint(filepath='../models/model-{epoch:02d}.hdf5', verbose=1)
+    num_epochs = 50
 
-checkpointer = ModelCheckpoint(filepath='../models/model-{epoch:02d}.hdf5', verbose=1)
-num_epochs = 20
+    model.fit_generator(train_data_generator.generate(), len(train_data)//(batch_size*num_steps), num_epochs, callbacks=[checkpointer])
+    
+    model.save("../models/final_model.hdf5")
 
-model.fit_generator(train_data_generator.generate(), len(train_data)//(batch_size*num_steps), num_epochs, callbacks=[checkpointer])
 
-model.save("../models/final_model.hdf5")
+def generate_from_model():
+
+    train = get_data_by_author('EAP')
+
+    word_to_id = build_vocab(train)
+    vocabulary = len(word_to_id)
+    reversed_dictionary = dict(zip(word_to_id.values(), word_to_id.keys()))
+
+    train_data = data_to_word_ids(train, word_to_id)
+
+    model = load_model("../models/final_model.hdf5")
+
+    num_steps = 30
+    dummy_iters = 40
+
+    # test data set
+    test_data = train_data
+    example_test_generator = KerasBatchGenerator(test_data, num_steps, 1, vocabulary,
+                                                     skip_step=1)
+
+    num_sentences_to_predict = 10
+    num_words_predict = 20
+
+    results = []
+    actuals = []
+    for j in range(num_sentences_to_predict):
+        true_print_out = "Actual words: "
+        pred_print_out = "Predicted words: "
+
+        for i in range(num_words_predict):
+            data = next(example_test_generator.generate())
+            prediction = model.predict(data[0])
+            predict_word = np.argmax(prediction[:, num_steps - 1, :])
+            
+            true_print_out += reversed_dictionary[test_data[num_steps + dummy_iters + i]] + " "
+            pred_print_out += reversed_dictionary[predict_word] + " "
+
+        actuals.append(true_print_out)
+        results.append(pred_print_out)
+
+        for _  in range(dummy_iters):
+            dummy = next(example_test_generator.generate())
+            dummy_iters += 1
+
+    for i in range(len(actuals)):
+        print (actuals[i])
+        print (results[i], '\n')
+
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-o','--option', help='a string to govern funcationality: train or generate', required=True)
+    args = vars(parser.parse_args())
+
+    if args['option'] == 'train':
+        train_model()
+    elif args['option'] == 'generate':
+        generate_from_model()
